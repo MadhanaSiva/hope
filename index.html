@@ -192,43 +192,31 @@
                 </p>
 
                 <div class="media-evidence-grid">
-                  <!-- Voice Note Card with Mic & Natural Speech Assistant -->
+                  <!-- Voice Note Microphone Recorder -->
                   <div class="voice-recorder-card" id="voiceRecorderBox">
                     <div id="voiceIdleState" style="width:100%;">
-                      <div style="display:flex; gap:6px;">
-                        <button type="button" id="btnStartVoiceRecord" class="btn-record-voice" style="flex:1;">
-                          🎙️ Record Mic
-                        </button>
-                      </div>
-                      <div class="quick-photo-presets" style="margin-top:6px;">
-                        <span style="font-size:0.68rem; color:var(--text-muted); width:100%;">Spoken voice presets:</span>
-                        <button type="button" class="preset-chip voice-preset-chip" data-voice="Heavy fire and smoke detected! Evacuation in progress, send fire warden immediately.">🔥 Fire Dispatch</button>
-                        <button type="button" class="preset-chip voice-preset-chip" data-voice="Medical emergency! Student collapsed and unconscious, need ambulance and stretcher.">🩺 Medical Alert</button>
-                        <button type="button" class="preset-chip voice-preset-chip" data-voice="Urgent security and safety hazard reported! Immediate responder support required.">⚠️ Hazard Alert</button>
-                      </div>
+                      <button type="button" id="btnStartVoiceRecord" class="btn-record-voice" style="width:100%; padding:10px 14px; font-weight:700; font-size:0.85rem;">
+                        🎙️ Record Voice Note (Speak Details)
+                      </button>
+                      <div style="font-size:0.7rem; color:var(--text-muted); margin-top:4px;">Click to record your voice through the microphone</div>
                     </div>
 
                     <div id="voiceRecordingState" class="recording-active-bar hidden">
                       <span class="rec-dot"></span>
                       <span class="rec-timer" id="voiceRecordingTimer">00:00</span>
-                      <button type="button" id="btnStopVoiceRecord" class="btn btn-sm btn-danger" style="padding:4px 10px; font-size:0.75rem;">
-                        ⏹️ Stop & Save Voice
+                      <button type="button" id="btnStopVoiceRecord" class="btn btn-sm btn-danger" style="padding:5px 14px; font-size:0.8rem; font-weight:700;">
+                        ⏹️ Stop Recording
                       </button>
                     </div>
 
                     <div id="voiceRecordedState" class="recorded-audio-wrap hidden">
                       <div style="display:flex; justify-content:space-between; align-items:center; width:100%;">
-                        <span style="font-size:0.75rem; font-weight:700; color:#34d399;">✅ Spoken Voice Attached</span>
+                        <span id="voiceRecordedLabel" style="font-size:0.75rem; font-weight:700; color:#34d399;">✅ Voice Note Recorded</span>
                         <button type="button" id="btnDeleteVoiceRecord" class="btn btn-sm btn-secondary" style="padding:2px 8px; font-size:0.7rem; color:#f87171;">
-                          🗑️ Remove
+                          🗑️ Re-Record
                         </button>
                       </div>
-                      <div id="voiceTranscriptPreview" style="font-size:0.75rem; color:#cbd5e1; font-style:italic; background:rgba(0,0,0,0.3); padding:6px 8px; border-radius:4px; margin-top:4px;"></div>
-                      <div style="display:flex; gap:6px; margin-top:6px; align-items:center;">
-                        <button type="button" id="btnPreviewRecordedVoice" class="btn btn-sm btn-primary" style="padding:4px 10px; font-size:0.75rem; width:100%;">
-                          🔊 Listen Spoken Voice
-                        </button>
-                      </div>
+                      <audio id="recordedAudioPlayer" controls style="width:100%; height:36px; margin-top:6px;"></audio>
                     </div>
                   </div>
 

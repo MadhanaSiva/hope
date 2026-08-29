@@ -89,14 +89,27 @@ const server = http.createServer((req, res) => {
   const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const pathname = parsedUrl.pathname;
 
+  // Global CORS Headers for all devices
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
   // =========================================================================
   // API ROUTE 1: Server-Sent Events (SSE) Stream for Live Cross-Device Sync
   // =========================================================================
   if (pathname === '/api/events') {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive'
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+      'X-Accel-Buffering': 'no'
     });
 
     const clientId = Date.now() + Math.random();
@@ -125,7 +138,16 @@ const server = http.createServer((req, res) => {
       req.on('end', () => {
         try {
           const newIncident = JSON.parse(body);
-          serverIncidents.unshift(newIncident);
+          
+          // Prevent duplicates
+          const existingIdx = serverIncidents.findIndex(i => i.id === newIncident.id);
+          if (existingIdx !== -1) {
+            serverIncidents[existingIdx] = newIncident;
+          } else {
+            serverIncidents.unshift(newIncident);
+          }
+
+          console.log(`🚨 [INCIDENT RECEIVED] ${newIncident.id} (${newIncident.category}) at ${newIncident.location} by ${newIncident.reportedBy?.name}`);
           
           // Broadcast to ALL devices on the network immediately!
           broadcastToAllClients('INCIDENT_CREATED', newIncident);
@@ -133,6 +155,7 @@ const server = http.createServer((req, res) => {
           res.writeHead(201, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ success: true, incident: newIncident }));
         } catch (err) {
+          console.error('Error in POST /api/incidents:', err.message);
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: err.message }));
         }
@@ -151,7 +174,10 @@ const server = http.createServer((req, res) => {
         const inc = serverIncidents.find(i => i.id === incidentId);
         if (inc) {
           inc.status = status;
-          if (status === 'Resolved') inc.resolvedAt = new Date().toISOString();
+          if (status === 'Resolved') {
+            inc.resolvedAt = new Date().toISOString();
+            inc.escalated = false;
+          }
           if (responder && !inc.assignedTo) {
             inc.assignedTo = { name: responder.name, role: responder.responderType || responder.role };
           }
@@ -159,6 +185,7 @@ const server = http.createServer((req, res) => {
             inc.timeline = inc.timeline || [];
             inc.timeline.unshift(timelineEntry);
           }
+          console.log(`✅ [STATUS UPDATED] ${inc.id} -> ${status}`);
           // Broadcast update to all network clients
           broadcastToAllClients('INCIDENT_UPDATED', inc);
           res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -168,6 +195,7 @@ const server = http.createServer((req, res) => {
           res.end(JSON.stringify({ error: 'Incident not found' }));
         }
       } catch (err) {
+        console.error('Error in /api/incidents/update:', err.message);
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: err.message }));
       }

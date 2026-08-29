@@ -359,47 +359,70 @@ function bindMediaEvidenceHandlers() {
     photoAttachedState.classList.add('hidden');
   }
 
-  // 1. Microphone Voice Note Recording
+  // 1. Clean Microphone Voice Note Recording
   if (btnStartVoice) {
     btnStartVoice.onclick = async () => {
-      voiceSeconds = 0;
-      voiceTimerEl.textContent = '00:00';
-      voiceIdleState.classList.add('hidden');
-      voiceRecordingState.classList.remove('hidden');
-      voiceRecordedState.classList.add('hidden');
-
-      // Start timer
-      voiceTimerInterval = setInterval(() => {
-        voiceSeconds++;
-        const mins = String(Math.floor(voiceSeconds / 60)).padStart(2, '0');
-        const secs = String(voiceSeconds % 60).padStart(2, '0');
-        voiceTimerEl.textContent = `${mins}:${secs}`;
-      }, 1000);
-
-      // Start Real AudioContext Hardware Microphone Stream if supported
-      recordedBuffers = [];
       try {
-        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-          mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          const AudioCtx = window.AudioContext || window.webkitAudioContext;
-          audioContext = new AudioCtx();
-          const source = audioContext.createMediaStreamSource(mediaStream);
-          
-          scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
-          scriptProcessor.onaudioprocess = (e) => {
-            const inputData = e.inputBuffer.getChannelData(0);
-            recordedBuffers.push(new Float32Array(inputData));
-          };
-          
-          source.connect(scriptProcessor);
-          scriptProcessor.connect(audioContext.destination);
-          isSimulatingRecording = false;
-        } else {
-          isSimulatingRecording = true;
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          showToast('Please open via localhost or Render (HTTPS) to enable microphone recording', 'danger');
+          return;
         }
+        
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioChunks = [];
+        
+        let mimeType = 'audio/webm';
+        if (typeof MediaRecorder !== 'undefined') {
+          if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+            mimeType = 'audio/webm;codecs=opus';
+          } else if (MediaRecorder.isTypeSupported('audio/webm')) {
+            mimeType = 'audio/webm';
+          } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+            mimeType = 'audio/mp4';
+          } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
+            mimeType = 'audio/ogg';
+          }
+          mediaRecorder = new MediaRecorder(mediaStream, { mimeType });
+        }
+
+        mediaRecorder.ondataavailable = (e) => {
+          if (e.data && e.data.size > 0) {
+            audioChunks.push(e.data);
+          }
+        };
+
+        mediaRecorder.onstop = () => {
+          const recordedBlob = new Blob(audioChunks, { type: mimeType });
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            finishVoiceRecording(reader.result, Math.max(voiceSeconds, 1));
+          };
+          reader.readAsDataURL(recordedBlob);
+
+          if (mediaStream) {
+            mediaStream.getTracks().forEach(track => track.stop());
+          }
+        };
+
+        mediaRecorder.start(100);
+
+        voiceSeconds = 0;
+        voiceTimerEl.textContent = '00:00';
+        voiceIdleState.classList.add('hidden');
+        voiceRecordingState.classList.remove('hidden');
+        voiceRecordedState.classList.add('hidden');
+
+        // Start timer
+        voiceTimerInterval = setInterval(() => {
+          voiceSeconds++;
+          const mins = String(Math.floor(voiceSeconds / 60)).padStart(2, '0');
+          const secs = String(voiceSeconds % 60).padStart(2, '0');
+          voiceTimerEl.textContent = `${mins}:${secs}`;
+        }, 1000);
+
       } catch (err) {
-        console.warn('Microphone stream error/blocked on HTTP context. Using speech synthesis note:', err.message);
-        isSimulatingRecording = true;
+        console.warn('Microphone permission error:', err.message);
+        showToast('Please click "Allow" on the microphone prompt to record your voice', 'danger');
       }
     };
   }
@@ -407,69 +430,41 @@ function bindMediaEvidenceHandlers() {
   if (btnStopVoice) {
     btnStopVoice.onclick = () => {
       clearInterval(voiceTimerInterval);
-      let wavDataUrl = '';
-
-      if (!isSimulatingRecording && audioContext && recordedBuffers.length > 0) {
-        if (scriptProcessor) scriptProcessor.disconnect();
-        if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
-        const sampleRate = audioContext.sampleRate || 44100;
-        wavDataUrl = encodeWavBase64(recordedBuffers, sampleRate);
-        try { audioContext.close(); } catch(e) {}
-      } else {
-        wavDataUrl = generateSimulatedVoiceWav(Math.max(voiceSeconds, 3));
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
       }
-
-      const details = document.getElementById('emergencyDetails')?.value?.trim();
-      const catLabel = selectedCategory.toUpperCase();
-      const transcript = details ? `Spoken Emergency Alert (${catLabel}): ${details}` : `Urgent ${catLabel} situation reported on campus. Responders needed immediately at location.`;
-
-      finishVoiceRecording(wavDataUrl, transcript, Math.max(voiceSeconds, 3));
     };
   }
 
-  // 1-Click Spoken Voice Presets
-  document.querySelectorAll('.voice-preset-chip').forEach(chip => {
-    chip.onclick = () => {
-      const voiceText = chip.getAttribute('data-voice');
-      const wavDataUrl = generateSimulatedVoiceWav(3);
-      finishVoiceRecording(wavDataUrl, voiceText, 3);
-    };
-  });
-
-  function finishVoiceRecording(dataUrl, transcript, duration) {
+  function finishVoiceRecording(dataUrl, duration) {
     currentVoiceNote = {
       dataUrl: dataUrl,
-      transcript: transcript,
-      text: transcript,
       duration: duration,
       recordedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
-    if (voiceTranscriptPreview) {
-      voiceTranscriptPreview.textContent = `🗣️ "${transcript}"`;
+    const labelEl = document.getElementById('voiceRecordedLabel');
+    if (labelEl) labelEl.textContent = `✅ Voice Note Recorded (${duration}s)`;
+
+    const player = document.getElementById('recordedAudioPlayer');
+    if (player) {
+      player.src = dataUrl;
     }
 
     voiceIdleState.classList.add('hidden');
     voiceRecordingState.classList.add('hidden');
     voiceRecordedState.classList.remove('hidden');
-    showToast(`🎙️ Spoken voice note ready (${duration}s)`, 'success');
-  }
-
-  if (btnPreviewRecordedVoice) {
-    btnPreviewRecordedVoice.onclick = () => {
-      if (currentVoiceNote) {
-        window.playVoiceData(currentVoiceNote);
-      }
-    };
+    showToast(`🎙️ Real microphone voice note recorded (${duration}s)`, 'success');
   }
 
   if (btnDeleteVoice) {
     btnDeleteVoice.onclick = () => {
       currentVoiceNote = null;
-      if (voiceTranscriptPreview) voiceTranscriptPreview.textContent = '';
+      const player = document.getElementById('recordedAudioPlayer');
+      if (player) player.src = '';
       voiceRecordedState.classList.add('hidden');
       voiceIdleState.classList.remove('hidden');
-      showToast('Voice note removed', 'info');
+      showToast('Voice recording removed', 'info');
     };
   }
 
@@ -489,7 +484,7 @@ function bindMediaEvidenceHandlers() {
   }
 
   // 1-Click Preset Emergency Photo Samples
-  document.querySelectorAll('.preset-chip:not(.voice-preset-chip)').forEach(btn => {
+  document.querySelectorAll('.preset-chip').forEach(btn => {
     btn.onclick = () => {
       const preset = btn.getAttribute('data-preset');
       const presetImg = generatePresetSvgPhoto(preset);
@@ -517,132 +512,39 @@ function bindMediaEvidenceHandlers() {
   }
 }
 
-// Universal Standard 16-bit PCM WAV Base64 Data URL Encoder
-function encodeWavBase64(audioBuffers, sampleRate = 44100) {
-  let totalLength = 0;
-  for (let i = 0; i < audioBuffers.length; i++) {
-    totalLength += audioBuffers[i].length;
-  }
-  const merged = new Float32Array(totalLength);
-  let offset = 0;
-  for (let i = 0; i < audioBuffers.length; i++) {
-    merged.set(audioBuffers[i], offset);
-    offset += audioBuffers[i].length;
-  }
-
-  const buffer = new ArrayBuffer(44 + merged.length * 2);
-  const view = new DataView(buffer);
-
-  writeString(view, 0, 'RIFF');
-  view.setUint32(4, 36 + merged.length * 2, true);
-  writeString(view, 8, 'WAVE');
-  writeString(view, 12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true); // PCM format
-  view.setUint16(22, 1, true); // Mono
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true); // 16-bit
-  writeString(view, 36, 'data');
-  view.setUint32(40, merged.length * 2, true);
-
-  let index = 44;
-  for (let i = 0; i < merged.length; i++) {
-    let s = Math.max(-1, Math.min(1, merged[i]));
-    view.setInt16(index, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
-    index += 2;
-  }
-
-  function writeString(v, off, str) {
-    for (let j = 0; j < str.length; j++) {
-      v.setUint8(off + j, str.charCodeAt(j));
-    }
-  }
-
-  // Convert ArrayBuffer to pure Base64 string safely without stack limits
-  let binary = '';
-  const bytes = new Uint8Array(buffer);
-  const len = bytes.byteLength;
-  const chunkSize = 0x8000; // 32KB chunks
-  for (let i = 0; i < len; i += chunkSize) {
-    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
-  }
-  return 'data:audio/wav;base64,' + btoa(binary);
-}
-
-// Generate Speech Harmonic Audio Note in pure Base64 WAV
-function generateSimulatedVoiceWav(durationSec = 3) {
-  const sampleRate = 16000;
-  const numSamples = sampleRate * durationSec;
-  const samples = new Float32Array(numSamples);
-  
-  for (let i = 0; i < numSamples; i++) {
-    const t = i / sampleRate;
-    const fundamental = 160 + Math.sin(t * 5) * 25;
-    const f1 = 600;
-    const f2 = 1200;
-    const envelope = Math.sin((t / durationSec) * Math.PI);
-    const val = (Math.sin(2 * Math.PI * fundamental * t) * 0.5 + 
-                 Math.sin(2 * Math.PI * f1 * t) * 0.3 + 
-                 Math.sin(2 * Math.PI * f2 * t) * 0.2) * envelope;
-    samples[i] = val * 0.7;
-  }
-  return encodeWavBase64([samples], sampleRate);
-}
-
-// Universal Natural Human Voice Playback & Speech Synthesis Engine
-window.playVoiceData = (rawUrlOrObj, incidentContext = null) => {
-  let spokenText = '';
+// 100% Pure Microphone Audio Playback (Plays ONLY the reporter's actual recorded human voice)
+window.playVoiceData = (incidentIdOrAudio) => {
   let audioUrl = '';
 
-  if (typeof rawUrlOrObj === 'object' && rawUrlOrObj !== null) {
-    spokenText = rawUrlOrObj.transcript || rawUrlOrObj.text || '';
-    audioUrl = rawUrlOrObj.dataUrl || rawUrlOrObj.url || '';
-  } else if (typeof rawUrlOrObj === 'string') {
-    if (rawUrlOrObj.startsWith('INC-')) {
-      const inc = window.state.getIncidents().find(i => i.id === rawUrlOrObj);
-      if (inc) {
-        spokenText = inc.voiceNote?.transcript || inc.description || `Emergency alert at ${inc.location}`;
-        audioUrl = inc.voiceNote?.dataUrl || inc.voiceNote;
+  if (typeof incidentIdOrAudio === 'string') {
+    if (incidentIdOrAudio.startsWith('INC-')) {
+      const inc = window.state.getIncidents().find(i => i.id === incidentIdOrAudio);
+      if (inc && inc.voiceNote) {
+        audioUrl = typeof inc.voiceNote === 'string' ? inc.voiceNote : (inc.voiceNote.dataUrl || inc.voiceNote.url);
       }
-    } else if (rawUrlOrObj.startsWith('data:audio')) {
-      audioUrl = rawUrlOrObj;
     } else {
-      spokenText = rawUrlOrObj;
+      audioUrl = incidentIdOrAudio;
     }
+  } else if (typeof incidentIdOrAudio === 'object' && incidentIdOrAudio !== null) {
+    audioUrl = incidentIdOrAudio.dataUrl || incidentIdOrAudio.url || '';
   }
 
-  if (!spokenText && incidentContext) {
-    spokenText = typeof incidentContext === 'string' ? incidentContext : (incidentContext.description || incidentContext.location || '');
+  if (!audioUrl) {
+    showToast('No voice recording attached to this incident', 'warning');
+    return;
   }
 
-  if (!spokenText) {
-    spokenText = 'Attention responders: Emergency situation reported on campus. Immediate responder dispatch required.';
-  }
-
-  // 1. Natural Human Speech Synthesis (Speaks clear English voice aloud on any browser & network)
-  if ('speechSynthesis' in window) {
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(spokenText);
-    utterance.rate = 0.95;
-    utterance.pitch = 1.0;
-    
-    const voices = window.speechSynthesis.getVoices();
-    const englishVoice = voices.find(v => v.lang.includes('en') && (v.name.includes('Google') || v.name.includes('Natural') || v.name.includes('Samantha') || v.name.includes('Zira') || v.name.includes('David') || v.name.includes('Daniel')));
-    if (englishVoice) utterance.voice = englishVoice;
-
-    window.speechSynthesis.speak(utterance);
-    showToast(`🗣️ Speaking: "${spokenText.substring(0, 50)}..."`, 'info');
-  }
-
-  // 2. Play Audio Stream if present
-  if (audioUrl && typeof audioUrl === 'string' && audioUrl.startsWith('data:audio')) {
-    try {
-      const audio = new Audio();
-      audio.src = audioUrl;
-      audio.play().catch(e => {});
-    } catch (e) {}
+  try {
+    const audio = new Audio();
+    audio.src = audioUrl;
+    audio.play().then(() => {
+      showToast('🎙️ Playing Reporter Real Voice Recording...', 'info');
+    }).catch(err => {
+      console.warn('Audio playback error:', err);
+      showToast('Click the play button on the audio player', 'info');
+    });
+  } catch (e) {
+    console.error('Audio initialization error:', e);
   }
 };
 
@@ -808,12 +710,12 @@ function renderStudentActiveIncident() {
           ${alertToDisplay.voiceNote ? `
             <div>
               <div class="media-evidence-header" style="display:flex; justify-content:space-between; align-items:center;">
-                <span>🎙️ Attached Voice Note:</span>
+                <span>🎙️ Your Microphone Voice Recording:</span>
                 <button type="button" class="btn btn-primary btn-sm" style="padding:2px 8px; font-size:0.75rem; font-weight:700;" onclick="playVoiceData('${alertToDisplay.id}')">
-                  🔊 Listen Voice
+                  ▶️ Play
                 </button>
               </div>
-              ${voiceTranscript ? `<div style="font-size:0.75rem; color:#cbd5e1; font-style:italic; background:rgba(0,0,0,0.3); padding:4px 8px; border-radius:4px; margin-top:4px;">"${voiceTranscript}"</div>` : ''}
+              <audio controls preload="auto" src="${alertToDisplay.voiceNote.dataUrl || alertToDisplay.voiceNote}" style="width:100%; height:36px; margin-top:6px;"></audio>
             </div>
           ` : ''}
           ${alertToDisplay.photoUrl ? `
@@ -1026,12 +928,12 @@ function renderResponderView() {
               ${inc.voiceNote ? `
                 <div>
                   <div class="media-evidence-header" style="display:flex; justify-content:space-between; align-items:center;">
-                    <span>🎙️ Attached Voice Note (${inc.voiceNote.duration || 3}s):</span>
+                    <span>🎙️ Reporter Voice Recording (${inc.voiceNote.duration || 3}s):</span>
                     <button type="button" class="btn btn-primary btn-sm" style="padding:3px 10px; font-size:0.75rem; font-weight:700;" onclick="playVoiceData('${inc.id}')">
-                      🔊 Listen Spoken Voice
+                      ▶️ Play Voice
                     </button>
                   </div>
-                  ${voiceTranscript ? `<div style="font-size:0.75rem; color:#cbd5e1; font-style:italic; background:rgba(0,0,0,0.3); padding:4px 8px; border-radius:4px; margin-top:4px;">"${voiceTranscript}"</div>` : ''}
+                  <audio controls preload="auto" src="${inc.voiceNote.dataUrl || inc.voiceNote}" style="width:100%; height:36px; margin-top:6px;"></audio>
                 </div>
               ` : ''}
 
@@ -1098,19 +1000,22 @@ function renderResponderView() {
   }).join('');
 }
 
-window.responderAcknowledge = (incidentId) => {
-  const responder = window.authManager.getCurrentUser();
-  window.alertManager.acknowledgeIncident(incidentId, responder);
+window.responderAcknowledge = async (incidentId) => {
+  const responder = window.authManager.getCurrentUser() || { name: 'On-Duty Responder', role: 'responder' };
+  await window.alertManager.acknowledgeIncident(incidentId, responder);
   showToast(`Incident ${incidentId} acknowledged! Escalation paused.`, 'success');
-  renderResponderView();
+  renderApp();
 };
 
-window.responderUpdateStatus = (incidentId, newStatus) => {
-  const responder = window.authManager.getCurrentUser();
-  window.alertManager.updateStatus(incidentId, newStatus, responder);
-  showToast(`Incident ${incidentId} updated to: ${newStatus}`, 'info');
-  renderResponderView();
-  updateCampusWideFireBanner();
+window.responderUpdateStatus = async (incidentId, newStatus) => {
+  const responder = window.authManager.getCurrentUser() || { name: 'Command Staff', role: 'admin' };
+  await window.alertManager.updateStatus(incidentId, newStatus, responder);
+  if (newStatus === 'Resolved') {
+    showToast(`✅ Incident ${incidentId} marked Resolved! Emergency notifications cleared.`, 'success');
+  } else {
+    showToast(`Incident ${incidentId} updated to: ${newStatus}`, 'info');
+  }
+  renderApp();
 };
 
 /* ==========================================================================
@@ -1415,7 +1320,7 @@ function renderAdminCommandCenter() {
         <td>${inc.reportedBy?.name || 'Sensor'}</td>
         <td>
           <div style="display:flex; gap:4px; align-items:center;">
-            ${inc.voiceNote ? `<button class="btn btn-sm btn-primary" style="padding:2px 6px; font-size:0.75rem; font-weight:700;" title="Listen Voice Note" onclick="playVoiceData('${inc.id}')">🔊 Listen</button>` : ''}
+            ${inc.voiceNote ? `<button class="btn btn-sm btn-primary" style="padding:2px 6px; font-size:0.75rem; font-weight:700;" title="Play Reporter Voice Recording" onclick="playVoiceData('${inc.id}')">🎙️ Play Voice</button>` : ''}
             ${inc.photoUrl ? `<button class="btn btn-sm btn-secondary" style="padding:2px 6px; font-size:0.75rem;" title="View Photo Evidence" onclick="openPhotoLightbox('${inc.photoUrl}')">📸 Photo</button>` : ''}
             ${!inc.voiceNote && !inc.photoUrl ? '<span style="color:var(--text-muted); font-size:0.75rem;">Text only</span>' : ''}
           </div>

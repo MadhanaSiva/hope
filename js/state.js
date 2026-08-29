@@ -188,8 +188,12 @@ class AppState {
     }
   }
 
-  // Real-Time Cross-Device Synchronization via Server-Sent Events (SSE)
+  // Real-Time Cross-Device Synchronization via Dual-Engine (SSE + 1000ms Fast Sync Polling)
   initServerSync() {
+    // 1. Initial immediate pull of server state on page load
+    this.pollServerIncidents();
+
+    // 2. Real-Time Server-Sent Events (SSE) Stream
     try {
       if ('EventSource' in window) {
         const eventSource = new EventSource('/api/events');
@@ -200,11 +204,14 @@ class AppState {
             
             if (event.type === 'INCIDENT_CREATED') {
               const incidents = this.getIncidents();
-              if (!incidents.some(i => i.id === event.data.id)) {
+              const existingIdx = incidents.findIndex(i => i.id === event.data.id);
+              if (existingIdx === -1) {
                 incidents.unshift(event.data);
-                localStorage.setItem(STORAGE_KEYS.INCIDENTS, JSON.stringify(incidents));
-                this.notifySubscribers({ type: 'INCIDENTS_UPDATED', incidents });
+              } else {
+                incidents[existingIdx] = event.data;
               }
+              localStorage.setItem(STORAGE_KEYS.INCIDENTS, JSON.stringify(incidents));
+              this.notifySubscribers({ type: 'INCIDENTS_UPDATED', incidents });
             } else if (event.type === 'INCIDENT_UPDATED') {
               const incidents = this.getIncidents();
               const idx = incidents.findIndex(i => i.id === event.data.id);
@@ -216,8 +223,12 @@ class AppState {
               localStorage.setItem(STORAGE_KEYS.INCIDENTS, JSON.stringify(incidents));
               this.notifySubscribers({ type: 'INCIDENTS_UPDATED', incidents });
             } else if (event.type === 'SYNC_STATE') {
-              if (event.data && event.data.incidents && event.data.incidents.length > 0) {
-                this.saveIncidents(event.data.incidents);
+              if (event.data && event.data.incidents && Array.isArray(event.data.incidents)) {
+                const currentList = this.getIncidents();
+                if (event.data.incidents.length > 0 || currentList.length === 0) {
+                  localStorage.setItem(STORAGE_KEYS.INCIDENTS, JSON.stringify(event.data.incidents));
+                  this.notifySubscribers({ type: 'INCIDENTS_UPDATED', incidents: event.data.incidents });
+                }
               }
             }
           } catch (err) {
@@ -226,11 +237,36 @@ class AppState {
         };
 
         eventSource.onerror = () => {
-          // Fallback to local storage if offline
+          // SSE reconnecting in background
         };
       }
     } catch (e) {
       console.warn('Server SSE sync unavailable:', e);
+    }
+
+    // 3. Fallback High-Speed 1000ms REST Polling (Guarantees sync even across strict Wi-Fi firewalls)
+    setInterval(() => {
+      this.pollServerIncidents();
+    }, 1000);
+  }
+
+  async pollServerIncidents() {
+    try {
+      const res = await fetch('/api/incidents');
+      if (res.ok) {
+        const serverList = await res.json();
+        if (Array.isArray(serverList)) {
+          const currentList = this.getIncidents();
+          const currKey = currentList.map(i => `${i.id}:${i.status}:${i.pulseAttempt}`).join('|');
+          const servKey = serverList.map(i => `${i.id}:${i.status}:${i.pulseAttempt}`).join('|');
+          if (currKey !== servKey) {
+            localStorage.setItem(STORAGE_KEYS.INCIDENTS, JSON.stringify(serverList));
+            this.notifySubscribers({ type: 'INCIDENTS_UPDATED', incidents: serverList });
+          }
+        }
+      }
+    } catch (e) {
+      // Offline fallback
     }
   }
 

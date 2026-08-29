@@ -262,7 +262,7 @@ class AlertManager {
   }
 
   // Update Status (En Route, On Scene, Resolved)
-  updateStatus(incidentId, newStatus, responder, notes = '') {
+  async updateStatus(incidentId, newStatus, responder, notes = '') {
     const incidents = window.state.getIncidents();
     const inc = incidents.find(i => i.id === incidentId);
     if (!inc) return;
@@ -270,25 +270,33 @@ class AlertManager {
     inc.status = newStatus;
     if (newStatus === 'Resolved') {
       inc.resolvedAt = new Date().toISOString();
+      inc.escalated = false;
+    }
+    if (responder && !inc.assignedTo) {
+      inc.assignedTo = {
+        name: responder.name,
+        role: responder.department || responder.responderType || responder.role
+      };
     }
 
     const timelineEntry = {
       status: newStatus,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-      note: `Status marked '${newStatus}' by ${responder.name}.${notes ? ' Note: ' + notes : ''}`
+      note: `Status marked '${newStatus}' by ${responder ? responder.name : 'Command Staff'}.${notes ? ' Note: ' + notes : ''}`
     };
 
+    inc.timeline = inc.timeline || [];
     inc.timeline.unshift(timelineEntry);
     window.state.saveIncidents(incidents);
-    window.state.addAuditLog(`ℹ️ Incident ${incidentId} status changed to ${newStatus} by ${responder.name}`);
+    window.state.addAuditLog(`ℹ️ Incident ${incidentId} status changed to ${newStatus} by ${responder ? responder.name : 'Command Staff'}`);
 
     // Sync update to server
     try {
-      fetch('/api/incidents/update', {
+      await fetch('/api/incidents/update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ incidentId, status: newStatus, responder, timelineEntry })
-      }).catch(e => console.warn('Server sync error:', e.message));
+      });
     } catch (e) {
       console.warn('Network sync error:', e);
     }
